@@ -1,0 +1,806 @@
+---
+title: "Mapping Reclamation: From Erasure to Healing"
+goal: "Analyze the spatial relationship between former Indian Residential School (IRS) locations and Indigenous-led infrastructure projects to identify signs of reclamation and healing."
+authors: "Jennifer Estigene (235264) & Iana Lanceta (235531)"
+output: 
+  html_document:
+    css: Text Style 1.css
+date: "2025-05-14"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Setup
+## Load Required Packages
+```{r}
+# Load necessary libraries 
+library(sf)          # For handling spatial vector data
+library(tidyverse)   # For data manipulation and plotting
+library(tmap)        # For thematic mapping
+library(janitor)     # For clean column names
+library(here)        # Helps manage file paths
+library(dbscan)      # For hotspot clustering
+library(leaflet)    # For creating interactive web maps
+library(mapview)    # For exporting interactive web maps as images
+library(spatstat)   # For conducting a cross-K function
+library(ggplot2)    # For generating a cross-K function flow map
+library(scales)     # For graphing visualizations
+```
+
+## Load Data
+```{r}
+# Set data folder path
+data_folder <- "C:/Users/ianal/OneDrive/Documents/Academic/Hertie MPP/2025 Spring Semester/E14_Geospatial Analysis for Data Science/Data Analysis/Data Files"
+
+# Load former residential school locations
+irs <- st_read(file.path(data_folder, "IRS_Locations.shp"))
+
+# Load Indigenous community infrastructure points
+infrastructure <- st_read(file.path(data_folder, "Indigenous_community_infrastructure.shp"))
+
+# Load Canadian map
+canada_map <- st_read(file.path(data_folder, "lpr_000b21a_e.shp"))
+```
+
+## Data Cleaning
+```{r}
+# Check structure of the datasets
+glimpse(irs)
+glimpse(infrastructure)
+
+# Check CRS (coordinate reference system)
+st_crs(irs)
+st_crs(infrastructure)
+
+# Reproject both datasets to Canada Lambert Conformal Conic to accurately represent local shapes and directions across much of the country
+canada_crs <- 3347
+canada_map_3347 <- st_transform(canada_map, crs = 3347)
+
+irs_proj <- st_transform(irs, crs = canada_crs)
+infrastructure_proj <- st_transform(infrastructure, crs = canada_crs)
+
+# Check to confirm
+st_crs(irs_proj)
+st_crs(infrastructure_proj)
+```
+
+## Create Buffer Zones
+```{r}
+# Create buffers at various distances (in meters)
+irs_1km <- st_buffer(irs_proj, dist = 1000) %>% mutate(buffer_km = 1)
+irs_5km <- st_buffer(irs_proj, dist = 5000) %>% mutate(buffer_km = 5)
+irs_10km <- st_buffer(irs_proj, dist = 10000) %>% mutate(buffer_km = 10)
+irs_20km <- st_buffer(irs_proj, dist = 20000) %>% mutate(buffer_km = 20)
+irs_50km <- st_buffer(irs_proj, dist = 50000) %>% mutate(buffer_km = 50)
+
+# Combine all into a single sf object
+irs_buffers <- bind_rows(irs_1km, irs_5km, irs_10km, irs_20km, irs_50km)
+
+```
+
+
+# Section 1: Primary Analysis
+The purpose of this analysis is to explore the geospatial relationship
+between former Canadian Indigenous residential school sites (IRS) and
+current Indigenous-led infrastructure projects (IIPs). In particular,
+point pattern comparisons and Cross-K functions are conducted in order
+to determine if areas surrounding former IRS sites are experiencing
+notable investment in Indigenous-led infrastructure projects. Such
+actions reflect broader efforts at cultural, social, and spatial
+reclamation that have been discussed in topic literature.
+
+
+## High-Level Overview: Projects per Buffer Zone
+The below table summarizes the number of IIPs within each defined
+"nearby" buffer of 1, 5, 10, 20, and 50km, as well as the number of IIPs
+outside this threshold.
+```{r}
+# Spatial join: match infrastructure points to buffers
+infrastructure_joined <- st_join(infrastructure_proj, irs_buffers, join = st_within)
+
+# Count how many infrastructure projects fall within each buffer
+infrastructure_counts <- infrastructure_joined %>%
+  st_drop_geometry() %>%
+  group_by(buffer_km) %>%
+  summarise(projects_within = n())
+
+infrastructure_counts
+
+```
+
+While the results reveal that the number of IIPs increases with
+distance,the cumulative number of projects within 50 km of former IRS
+sites is greater than those beyond.
+
+
+## Buffer Zone Composition by Project Category
+Since "infrastructure" projects can include both practical municipal
+installments (such as water and waste management) as well as
+socio-cultural community development initiatives (such as those related
+to recreation, health, and education), it is meaningful to investigate
+what types of projects dominate within different distance bands.
+```{r}
+# Summarize: Count by category and buffer
+infrastructure_by_category <- infrastructure_joined %>%
+  st_drop_geometry() %>%
+  group_by(buffer_km, TYPE_EN) %>%
+  summarise(projects = n(), .groups = "drop") %>%
+  arrange(buffer_km, desc(projects))
+
+infrastructure_by_category
+
+```
+
+The insights within this table suggest that spatial proximity may more
+closely reflect symbolic reclamation compared to practical
+infrastructure delivery.
+
+
+## Figure 1: Overlaying Buffer Zone Counts with Project Type Volumes
+```{r}
+Figure_1 <- ggplot(infrastructure_by_category, aes(x = factor(buffer_km), y = projects, fill = TYPE_EN)) +
+  geom_bar(stat = "identity") +
+  labs(
+    x = "Buffer Distance (km)",
+    y = "Number of Indigenous-Led Infrastructure Projects",
+    title = "Figure 1- IIP by Buffer & Project Type",
+    fill = "Project Type",
+  ) +
+  scale_x_discrete(labels = c("1", "5", "10", "20", "50", "> 50km")) +
+  scale_y_continuous(labels = comma) + 
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1), 
+    axis.title.x = element_text(size = 10, margin = margin(t = 5)), 
+    axis.title.y = element_text(size = 10, margin = margin(r = 5)),
+    axis.line = element_line(color = "black", linewidth = 0.5),   
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    plot.title = element_text(hjust = 0.5, vjust = 2, size = 11), 
+    legend.title = element_text(size = 10) 
+  )
+
+Figure_1
+
+# Save the plot as a PNG file
+ggsave("Figure 1- IIP by Buffer & Project Type.png", plot = Figure_1, width = 10, height = 6, units = "in", dpi = 300)
+```
+
+This stacked bar graph demonstrates the findings noted above: (1) IIP
+volume increases with buffer zone level, (2) total IIPs within 50 km of
+IRS sites is greater than those beyond this threshold, and (3) there is
+a considerable amount of socio-cultural projects (brown to teal colours)
+that hint at symbolic forms of spatial reclamation.
+
+
+## Figure 2: Map of High-Reclamation IRS Sites
+For future policy discussions and program development, it is useful to
+know where the "most reclaimed" IRS site are located across Canada.
+```{r}
+# Count projects within 10 km of each IRS site
+irs_10km <- st_buffer(irs_proj, dist = 10000) %>%
+  mutate(irs_id = row_number())
+
+projects_per_site <- st_join(infrastructure_proj, irs_10km, join = st_within) %>%
+  st_drop_geometry() %>%
+  group_by(irs_id) %>%
+  summarise(n_projects = n(), .groups = "drop")
+
+# Select top 5 IRS sites by number of nearby projects
+top_reclaimed_ids <- projects_per_site %>%
+  arrange(desc(n_projects)) %>%
+  slice_head(n = 5) %>%
+  pull(irs_id)
+
+# Highlight these on the map
+top_irs_sites <- irs_proj %>%
+  mutate(irs_id = row_number()) %>%
+  filter(irs_id %in% top_reclaimed_ids)
+
+# Map all IRS sites in gray, top 5 in red
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addCircleMarkers(data = st_transform(irs_proj, 4326),  # all sites
+                   radius = 3, color = "gray", stroke = FALSE, fillOpacity = 0.6) %>%
+  addCircleMarkers(data = st_transform(top_irs_sites, 4326),  # top 5
+                   radius = 6, color = "red", stroke = TRUE, fillOpacity = 0.9,
+                   label = ~paste("Top IRS site", irs_id)) %>%
+  setView(lng = -95, lat = 55, zoom = 3)
+
+leaflet_map <- leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addCircleMarkers(data = st_transform(irs_proj, 4326),  # all sites
+                   radius = 3, color = "gray", stroke = FALSE, fillOpacity = 0.6) %>%
+  addCircleMarkers(data = st_transform(top_irs_sites, 4326),  # top 5
+                   radius = 6, color = "red", stroke = TRUE, fillOpacity = 0.9,
+                   label = ~paste("Top IRS site", irs_id)) %>%
+  setView(lng = -95, lat = 55, zoom = 3)
+
+
+# Save the map into a static image 
+Figure_2 <- ggplot() +
+  geom_sf(data = canada_map_3347, fill = "lightgray", color = "black") +
+  geom_sf(data = st_transform(irs_proj, crs = st_crs(canada_map_3347)),
+          aes(color = "All IRS Sites"), size = 1) +
+  geom_sf(data = st_transform(top_irs_sites, crs = st_crs(canada_map_3347)),
+          aes(color = "Top 5 IRS Sites"), size = 3) +
+  scale_color_manual(values = c("All IRS Sites" = "blue", "Top 5 IRS Sites" = "red"),
+                     name = "IRS Site Category") + 
+  coord_sf(crs = 3347) +
+  labs(title = "Figure 2- Top IRS Sites by Nearby Infrastructure Projects") + 
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, vjust = 2, size = 11),
+    legend.position = "bottom") 
+
+Figure_2
+
+# Save the plot as a PNG file
+ggsave("Figure 2- Map of High Reclamation IRS Sites.png", plot = Figure_2, width = 10, height = 6, units = "in", dpi = 300)
+
+```
+
+Rather than concentrated in a specific region, the top 5 most reclaimed
+IRS sites are spread across the country. This knowledge can serve as the
+starting point for further research to see how effectively other truth
+and reconciliation efforts are implemented in these areas.
+
+
+## Cross-K Analysis
+Conducting a cross-k function will help identify any statistically
+significant correlations between point patterns by checking if point
+patterns cluster at the same locations.
+
+
+### Figure 3: Spatial Statistics
+The plot shows the estimated cross-K function,
+$\hat{K}_{irs,infrastructure}(r)$ (representing the main result: cross-K
+function between IRS and infrastructure), as the solid black line
+(labeled $\hat{K}_{irs,infrastructure}^{iso}(r)$ which stands for
+isotropic correction, a type of edge correction that tries to account
+for this bias in a way that assumes the pattern is the same in all
+directions. The x-axis represents the distance $r$, and the y-axis
+represents the value of the cross-K function at that distance.
+
+The other lines on the plot represent different edge correction methods
+($\hat{K}_{irs,infrastructure}^{trans}(r)$ for translation correction
+and $\hat{K}_{irs,infrastructure}^{bord}(r)$ for border correction). As
+can be seen, these should lines are reasonably close to each other-
+which is ideal. The blue dashed line
+($\hat{K}_{irs,infrastructure}^{pois}(r)$) represents the theoretical
+value of the cross-K function under the null hypothesis of complete
+spatial randomness (CSR) and independence between the two point
+patterns.
+```{r}
+# Extract bounding boxes from the sf objects
+irs_bbox <- st_bbox(irs)
+infrastructure_bbox <- st_bbox(infrastructure)
+
+# Determine the overall extent by finding the minimum and maximum of all coordinates
+xmin <- min(irs_bbox["xmin"], infrastructure_bbox["xmin"])
+xmax <- max(irs_bbox["xmax"], infrastructure_bbox["xmax"])
+ymin <- min(irs_bbox["ymin"], infrastructure_bbox["ymin"])
+ymax <- max(irs_bbox["ymax"], infrastructure_bbox["ymax"])
+
+# Define the observation window
+window <- owin(c(xmin, xmax), c(ymin, ymax))
+
+# Create ppp objects using the extracted coordinates
+irs_coords <- st_coordinates(irs)
+infrastructure_coords <- st_coordinates(infrastructure)
+
+irs_ppp <- ppp(x = irs_coords[, 1], y = irs_coords[, 2], window = window)
+infrastructure_ppp <- ppp(x = infrastructure_coords[, 1], y = infrastructure_coords[, 2], window = window)
+
+# Combine coordinates
+all_x <- c(irs_coords[, 1], infrastructure_coords[, 1])
+all_y <- c(irs_coords[, 2], infrastructure_coords[, 2])
+
+# Create a vector of marks indicating the type of each point
+all_types <- c(rep("irs", nrow(irs_coords)), rep("infrastructure", nrow(infrastructure_coords)))
+
+# Create a multitype ppp object
+all_points_marked <- ppp(x = all_x, y = all_y, window = window, marks = factor(all_types))
+
+# Define a sequence of distances (r)
+max_distance <- diff(range(window$x)) / 5
+r_values <- seq(0, max_distance, length.out = 100)
+
+# Calculate the cross-K function
+cross_K <- Kcross(all_points_marked, i = "irs", j = "infrastructure", r = r_values)
+
+plot(cross_K,
+     main = "Figure 3- Spatial Statistics: Former IRS and IIPs",
+     cex.main = 0.8,
+     cex.lab = 0.7,
+     cex.axis = 0.6,
+     xlab = "r (distance in km)",
+     ylab = expression(K[irs, infrastructure](r)),
+     legend = FALSE,
+     mgp = c(1.5, 0.5, 0)
+)
+
+# Adding and formatting legend
+legend("topleft",
+       legend = c(expression(hat(K)[irs, infrastructure]^{iso}(r)),
+                  expression(hat(K)[irs, infrastructure]^{trans}(r)),
+                  expression(hat(K)[irs, infrastructure]^{bord}(r)),
+                  expression(K[irs, infrastructure]^{pois}(r))),
+       lty = c(1, 2, 3, 4),
+       col = c("black", "red", "forestgreen", "blue"),
+       cex = 0.6
+)
+
+```
+
+*This plot indicates that former residential schools and Indigenous
+community infrastructure tend to be located closer to each other more
+often than you would expect if their locations were completely random
+and independent of each other*. This clustering effect seems to be more
+pronounced at distances up to around 3km from a former IRS and current
+infrastructure project. Beyond the 5km mark, the spatial relationship
+appears to weaken.
+
+The below code is simply to export the above graph.
+```{r}
+# Printing as PNG
+dev.off()
+
+# Print a confirmation message
+print("Cross-K function plot saved as cross_k_function.png")
+```
+
+
+### Figure 4: Geographically Weighted Flow Cross-K Function
+A geographically weighted flow cross-k function in order to see the
+previous findings visualized as a map.
+```{r}
+# Create map using ggplot2
+ggplot() +
+  geom_sf(data = irs, aes(color = "Former IRS"), size = 1.5, shape = 16) +
+  geom_sf(data = infrastructure, aes(color = "Indigenous Infrastructure"), size = 1.5, shape = 17) +
+  scale_color_manual(name = "Point Type",  # Set the legend title
+                     values = c("Former IRS" = "red", "Indigenous Infrastructure" = "blue")) +
+  labs(title = "Figure 4- Geographically Weighted Flow Cross-K Map") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+leaflet() %>%
+  addTiles() %>% # Add default OpenStreetMap tiles
+  addCircleMarkers(data = irs,
+                   color = "red",
+                   radius = 5,
+                   fillOpacity = 0.8,
+                   label = "Former IRS") %>%
+  addCircleMarkers(data = infrastructure,
+                   color = "blue",
+                   radius = 5,
+                   fillOpacity = 0.8,
+                   label = "Indigenous Infrastructure") %>%
+  addLegend(position = "bottomright",
+            colors = c("red", "blue"),
+            labels = c("Former IRS", "Indigenous Infrastructure"))
+
+irs_transformed <- st_transform(irs, crs = st_crs(canada_map_3347))
+infrastructure_transformed <- st_transform(infrastructure, crs = st_crs(canada_map_3347))
+
+# Save map into a static image
+Figure_4 <- ggplot() +
+  geom_sf(data = canada_map_3347, fill = "lightgray", color = "black") +
+  geom_sf(data = irs_transformed, aes(color = "Former IRS"), size = 1.5, shape = 16) +
+  geom_sf(data = infrastructure_transformed, aes(color = "Indigenous Infrastructure"), size = 1.5, shape = 17) +
+  scale_color_manual(name = "Point Type",  # Set the legend title
+                     values = c("Former IRS" = "red", "Indigenous Infrastructure" = "blue")) +
+  labs(title = "Figure 4- Geographically Weighted Flow Cross-K Map") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# Save the ggplot2 map as a PNG file
+ggsave("Figure 4- Geographically Weighted Flow Cross-K Map.png", plot = Figure_4, width = 10, height = 8, units = "in", dpi = 300)
+
+# Confirmation message
+print("Figure 4- Geographically Weighted Flow Cross-K Map.png")
+
+```
+
+As described above, there are clear clusters of IIPs atop where former
+IRS sites used to be. In line with topic literature (McBain, 2021), this
+analysis finds that former IRS sites are experiencing notable investment
+in nearby IIPs, which reflects broader efforts at cultural, social, and
+spatial land reclamation. These transformations are vital to healing as
+they encourage reconnection with erased cultural landscapes [and
+challenge] current Eurocentric conservation practices” (McBain, 2021).
+
+
+# Section 2: Data Sources/References
+
+Canadian Map – Provinces & Territories Dataset (DOI:
+<https://www12.statcan.gc.ca/census-recensement/alternative_alternatif.cfm>)
+
+Former IRS site data from the Borealis Data Repository (DOI:
+10.5683/SP2/FJG5TG)
+
+Indigenous Services Canada’s IIP Dataset (DOI: geo.sac-isc.gc.ca)
+
+McBain, C. (2021). De-Colonial Intersections of Conservation and
+Healing: The Indian Residential School System (Doctoral dissertation,
+Carleton University).
+
+
+# Section 3: Appendix- Further Analysis
+The scope of this assignment and research question limits the number of
+figures included in the primary analysis. However, given the importance
+of reconciliation and reclamation efforts in Canada today, the below
+analyses contribute to research in the space to support healing and
+data-driven policymaking and program development.
+
+
+## Buffer Breakdown by Province/Territory
+Question: Are some provinces more active in reclaiming land near former
+IRS sites?
+```{r}
+# Group and count by province and buffer distance
+infrastructure_by_province <- infrastructure_joined %>%
+  st_drop_geometry() %>%
+  group_by(PROV_EN, buffer_km) %>%
+  summarise(projects = n(), .groups = "drop") %>%
+  arrange(PROV_EN, buffer_km)
+
+infrastructure_by_province
+```
+
+This table breaks down infrastructure projects by buffer distance and
+province, revealing spatial variation across regions. Some provinces,
+such as British Columbia and Alberta, show strong project clustering
+near IRS sites, while others show more dispersed patterns - reflecting
+regional differences in historical settlement, school density, and
+funding allocation.
+
+
+## Former Schools with Highest Concentration Of Surrounding Projects
+```{r}
+# Create count of IRS sites per province (using PROV_EN)
+irs_by_province <- irs_proj %>%
+  st_drop_geometry() %>%
+  rename(PROV_EN = Province) %>%   # ensure naming matches
+  group_by(PROV_EN) %>%
+  summarise(n_schools = n(), .groups = "drop")
+
+# Create lookup table
+prov_lookup <- tibble(
+  PROV_EN = c("AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT"),
+  province_full = c(
+    "Alberta", "British Columbia", "Manitoba", "New Brunswick", "Newfoundland and Labrador",
+    "Nova Scotia", "Northwest Territories", "Nunavut", "Ontario", "Prince Edward Island",
+    "Quebec", "Saskatchewan", "Yukon"
+  )
+)
+
+# Add province_full to both datasets
+infrastructure_by_province_named <- infrastructure_by_province %>%
+  left_join(prov_lookup, by = "PROV_EN")
+
+irs_by_province_named <- irs_by_province %>%
+  left_join(prov_lookup, by = "PROV_EN")
+
+# Summarize IRS sites per province (1 row per province_full)
+irs_by_province_summarized <- irs_by_province_named %>%
+  group_by(province_full) %>%
+  summarise(n_schools = sum(n_schools), .groups = "drop")
+
+# Join and calculate projects per school
+province_normalized <- infrastructure_by_province_named %>%
+  left_join(irs_by_province_summarized, by = "province_full") %>%
+  mutate(projects_per_school = round(projects / n_schools, 2))
+
+# View result
+province_normalized
+```
+
+This table normalizes infrastructure project counts by the number of IRS
+sites per province, highlighting the relative intensity of project
+activity. Provinces with higher "projects per school" values suggest
+more spatially concentrated reclamation efforts. This metric reveals
+where Indigenous communities may be focusing more actively on reclaiming
+space near former school locations.
+
+```{r}
+# Unique values in each dataset
+unique(infrastructure_by_province$PROV_EN)
+unique(irs_by_province$PROV_EN)
+```
+
+
+## IRS Site-Level Reclamation Density
+Question: Which former schools have the highest concentration of
+surrounding projects?
+```{r}
+# Create 10km buffer around each IRS site with unique ID
+irs_10km <- st_buffer(irs_proj, dist = 10000) %>%
+  mutate(irs_id = row_number())
+
+# Join projects to IRS sites using the 10km buffer
+projects_per_site <- st_join(infrastructure_proj, irs_10km, join = st_within)
+
+# Count projects per IRS site
+projects_per_site_summary <- projects_per_site %>%
+  st_drop_geometry() %>%
+  group_by(irs_id) %>%
+  summarise(projects_nearby = n(), .groups = "drop") %>%
+  arrange(desc(projects_nearby))
+
+projects_per_site_summary
+
+# Join back with original IRS data to get names
+projects_per_site_summary_named <- projects_per_site_summary %>%
+  left_join(
+    irs_proj %>% mutate(irs_id = row_number()) %>% st_drop_geometry() %>%
+      select(irs_id, NRCNamePri),
+    by = "irs_id"
+  ) %>%
+  select(NRCNamePri, projects_nearby) %>%
+  arrange(desc(projects_nearby))
+
+projects_per_site_summary_named
+```
+
+This summary identifies former IRS sites with the most and fewest nearby
+infrastructure projects (within 10km). The variation between sites
+highlights uneven spatial patterns of reclamation. Sites with no or few
+nearby projects may represent under-recognized areas of potential
+cultural revitalization or indicate differing local priorities.
+
+
+## Distance-to-Nearest IRS Site
+Question: How close is each infrastructure project to the nearest former
+IRS site?
+```{r}
+# Calculate pairwise distances (in meters)
+distance_matrix <- st_distance(infrastructure_proj, irs_proj)
+
+# Get the minimum distance to any IRS site for each project
+infrastructure_proj$min_distance_m <- apply(distance_matrix, 1, min)
+
+# Convert meters to kilometers
+infrastructure_proj$min_distance_km <- round(infrastructure_proj$min_distance_m / 1000, 2)
+
+# Summarize distance statistics
+infrastructure_proj %>%
+  st_drop_geometry() %>%
+  summarise(
+    mean_distance_km = mean(min_distance_km),
+    median_distance_km = median(min_distance_km),
+    min_distance_km = min(min_distance_km),
+    max_distance_km = max(min_distance_km)
+  )
+
+infrastructure_proj
+```
+
+This records how far each project is from the nearest IRS site. It
+allows us to assess overall proximity and evaluate whether projects tend
+to cluster near former schools. The majority of projects appear within
+50km, reinforcing the spatial relationship between reclamation activity
+and former IRS locations.
+
+
+## Density Ratios: Projects Per Square KM
+Question: Are projects more spatially dense near IRS sites, or further
+away?
+```{r}
+# Calculate total area per buffer_km (in km²)
+buffer_areas <- irs_buffers %>%
+  mutate(area_km2 = as.numeric(st_area(geometry)) / 1e6) %>%
+  st_drop_geometry() %>%
+  group_by(buffer_km) %>%
+  summarise(total_area_km2 = sum(area_km2), .groups = "drop")
+
+# Reuse the infra_counts data (number of projects per buffer_km)
+# Make sure infra_counts exists from previous steps
+
+# Join counts with areas and compute density
+density_summary <- left_join(infrastructure_counts, buffer_areas, by = "buffer_km") %>%
+  mutate(
+    projects_per_km2 = round(projects_within / total_area_km2, 4)
+  ) %>%
+  arrange(buffer_km)
+
+density_summary
+```
+
+This table calculates project density (projects per square kilometer)
+for each buffer zone. It shows a steep decline in density as distance
+increases from the IRS sites - indicating a strong spatial concentration
+of projects in areas closest to former schools. This supports the
+hypothesis that land reclamation efforts are geographically targeted
+toward these historical sites.
+
+
+## Buffer Ring Analysis
+Question: How does the number of infrastructure projects change across
+distance bands from former IRS sites?
+```{r}
+# Ensure counts are sorted
+infrastructure_ring <- infrastructure_counts %>%
+  arrange(buffer_km) %>%
+  mutate(
+    ring_label = case_when(
+      buffer_km == 1 ~ "0–1 km",
+      buffer_km == 5 ~ "1–5 km",
+      buffer_km == 10 ~ "5–10 km",
+      buffer_km == 20 ~ "10–20 km",
+      buffer_km == 50 ~ "20–50 km",
+      TRUE ~ NA_character_
+    ),
+    ring_projects = projects_within - lag(projects_within, default = 0)
+  )
+
+infrastructure_ring
+```
+
+This analysis separates project counts into distinct distance rings
+(e.g., 0-1km, 1-5km, 5-10km, etc.), rather than cumulative buffers. The
+results show a sharp drop-off in the number of projects as distance
+increases, with the highest concentration occurring closest to former
+IRS sites. This supports the hypothesis that many infrastructure efforts
+are spatially clustered around these historical locations, potentially
+reflecting deliberate reclamation.
+
+
+## Top 5 Project Types per Distance Band
+Question: Which types of infrastructure projects are most commonly
+located near former IRS sites, and how does this vary by distance?
+```{r}
+top_types_per_buffer <- infrastructure_by_category %>%
+  group_by(buffer_km) %>%
+  slice_max(order_by = projects, n = 5) %>%
+  arrange(buffer_km, desc(projects))
+
+top_types_per_buffer
+```
+
+This breakdown identifies the top five project types within each buffer
+distance from former IRS sites. It reveals how certain types of
+infrastructure - such as housing or education facilities - are more
+frequently placed in close proximity to these historical locations. This
+pattern suggests that spatial placement may reflect symbolic intent,
+service delivery priorities, or funding strategies tied to proximity.
+
+
+## Compare "Ongoing" vs "Completed" Project Proximity
+Question: Do ongoing infrastructure projects tend to be located closer
+to former IRS sites than completed ones?
+```{r}
+infrastructure_proj %>%
+  st_drop_geometry() %>%
+  filter(!is.na(min_distance_km)) %>%
+  group_by(STATUS_EN) %>%
+  summarise(
+    avg_distance = mean(min_distance_km),
+    median_distance = median(min_distance_km),
+    count = n()
+  )
+
+infrastructure_proj
+```
+
+This comparison of average and median distances shows that ongoing
+projects are, on average, closer to former IRS sites than completed
+ones. While the dataset lacks full timestamps, project status offers a
+temporal proxy. The results suggest that more recent infrastructure
+efforts are increasingly concentrated near IRS sites- indicating a
+growing spatial focus on land reclamation and healing in these
+historically significant areas.
+
+
+## Under-Reclaimed IRS Sites (Few or No Projects Nearby)
+Question: Which former IRS sites have few or no infrastructure projects
+within 10km?
+```{r}
+# Buffer around IRS sites
+irs_10km <- st_buffer(irs_proj, dist = 10000) %>%
+  mutate(irs_id = row_number())
+
+# Join and count projects per IRS site
+low_reclaimed <- st_join(infrastructure_proj, irs_10km, join = st_within) %>%
+  st_drop_geometry() %>%
+  group_by(irs_id) %>%
+  summarise(n_projects = n()) %>%
+  right_join(irs_proj %>% mutate(irs_id = row_number()), by = "irs_id") %>%
+  replace_na(list(n_projects = 0)) %>%
+  filter(n_projects <= 2) %>%
+  select(NRCNamePri, n_projects) %>%
+  arrange(n_projects)
+
+low_reclaimed
+```
+
+This table identifies IRS sites with few or no nearby infrastructure
+projects within 10km. These locations may represent under-recognized or
+under-served areas.
+
+
+## Spatial Proximity Analysis
+Question: How can infrastructure projects be categorized based on their
+spatial proximity to former IRS sites, and what insights emerge from
+comparing these categories?
+```{r}
+# Add distance category labels to infrastructure projects
+infrastructure_proj <- infrastructure_proj %>%
+  mutate(distance_band = case_when(
+    min_distance_km <= 5 ~ "Close (≤5km)",
+    min_distance_km <= 20 ~ "Mid (5–20km)",
+    TRUE ~ "Far (>20km)"
+  ))
+
+# View breakdown by band
+infrastructure_proj %>%
+  st_drop_geometry() %>%
+  count(distance_band) %>%
+  mutate(percent = round(100 * n / sum(n), 1))
+```
+
+Projects were grouped into three distance bands to simplify proximity
+analysis. This categorization enables clearer comparisons across project
+types, provinces, and statuses. The majority of projects fall into the
+"Far" category, but a notable concentration is within the "Close" range
+supports the presence of targeted reclamation near former school sites.
+
+
+## Project Type Distribution by Proximity Category
+
+Question: Which types of infrastructure projects are most common within
+close, mid, and far distances from former IRS sites?
+
+```{r}
+# Project types by proximity band
+proj_type_by_distance <- infrastructure_proj %>%
+  st_drop_geometry() %>%
+  group_by(distance_band, TYPE_EN) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  arrange(distance_band, desc(n))
+
+proj_type_by_distance
+```
+
+This analysis reveals that certain types of infrastructure projects are
+disproportionately represented in areas close to former Indian
+Residential School (IRS) sites. For instance, cultural, education, and
+health-related projects are most common in the “Close (≤5 km)” band,
+suggesting that these forms of development may be spatially targeted to
+reclaim and revitalize historically significant sites. In contrast,
+broader categories such as general housing or transportation
+infrastructure are more evenly distributed or tend to increase with
+distance, possibly reflecting regional infrastructure needs beyond
+symbolic reclamation.
+
+## Project Types Are Closest to IRS Sites
+Question: Which types of infrastructure projects are spatially closest
+(on average) to former IRS sites?
+```{r}
+# Analyze average proximity to IRS sites by project type
+proj_type_proximity <- infrastructure_proj %>%
+  st_drop_geometry() %>%
+  group_by(TYPE_EN) %>%
+  summarise(
+    avg_distance_km = mean(min_distance_km, na.rm = TRUE),
+    n_projects = n()
+  ) %>%
+  arrange(avg_distance_km)
+
+# View results: which project types are closest on average
+proj_type_proximity
+```
+
+When sorted by average distance to the nearest former IRS site, the
+analysis shows that health, and service based infrastructure projects
+are among the closest. These types of projects have the smallest mean
+distance values, indicating a strong spatial and symbolic connection to
+the legacy of the residential school system. The proximity of these
+project types supports the view that certain infrastructure categories
+are intentionally placed near former school locations as a form of
+land-based healing or remembrance.
