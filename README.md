@@ -54,7 +54,7 @@ This analysis reveals compelling evidence that former Indian Residential School 
 
 The findings align with topic literature (McBain, 2021) on Indigenous healing and land reclamation, demonstrating that infrastructure investment patterns reflect more than coincidental geographic distribution—they represent deliberate efforts to transform spaces once associated with colonial trauma into centers of Indigenous community development and cultural revitalization.
 
-![Poster Summary](/figures/E14-GeoAnalysis_Poster_EstigeneLanceta.pdf)
+![Poster Summary](/figures/E14-GeoAnalysis_Poster_EstigeneLanceta.png)
 
 ---
 
